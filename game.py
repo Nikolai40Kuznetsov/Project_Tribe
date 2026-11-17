@@ -1,5 +1,5 @@
 import sys
-from PyQt5.QtWidgets import QApplication, QWidget
+from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QLabel, QSpinBox, QLineEdit
 from PyQt5.QtGui import QPainter, QPen, QColor
 from PyQt5.QtCore import Qt, QRect
 
@@ -17,6 +17,44 @@ class GridWidget(QWidget):
         self.setFixedSize(FIELD_W, FIELD_H)
 
         self.tiles = [[{"col": c, "row": r, "is_river": False} for c in range(COLS)] for r in range(ROWS)]
+
+    def create_label(window, text, font, width, height, x, y):
+        lbl = QLabel(window)
+        lbl.setText(text)
+        lbl.setFont(font)
+        lbl.resize(width, height)
+        lbl.move(x, y)
+        lbl.show()
+        return lbl
+
+    def create_button(window, text, font, width, height, x, y, function):
+        btn = QPushButton(window)
+        btn.setText(text)
+        btn.setFont(font)
+        btn.resize(width, height)
+        btn.move(x, y)
+        btn.clicked.connect(function)
+        btn.show()
+        return btn
+
+    def create_spinbox(window, font, width, height, x, y, range_bottom, range_top, value_start):
+        spb = QSpinBox(window)
+        spb.setFont(font)
+        spb.move(x, y)
+        spb.resize(width, height)
+        spb.setRange(range_bottom, range_top)
+        spb.setValue(value_start)
+        spb.show()
+        return spb
+
+    def create_inputbox(window, placeholder_text, font, width, height, x, y):
+        ipb = QLineEdit(window)
+        ipb.setPlaceholderText(placeholder_text)
+        ipb.setFont(font)
+        ipb.move(x, y)
+        ipb.resize(width, height)
+        ipb.show()
+        return ipb
 
     def set_river(self, cells):
         """Задаёт реку вручную: cells — список клеток (col, row).
@@ -59,32 +97,11 @@ class GridWidget(QWidget):
             painter.drawLine(0, y, self.width(), y)
             y += CELL_SIZE
 
-
-def make_river_line(start, end):
-    """Прямая линия реки от start до end: возвращает список клеток (col, row).
-    На диагоналях делает ступеньки — сначала по горизонтали, потом по вертикали."""
-    (c1, r1), (c2, r2) = start, end
-    cells = []
-    step_c = 1 if c2 >= c1 else -1
-    step_r = 1 if r2 >= r1 else -1
-
-    c = c1
-    while c != c2 + step_c:
-        cells.append((c, r1))
-        c += step_c
-    r = r1 + step_r
-    while r != r2 + step_r:
-        cells.append((c2, r))
-        r += step_r
-
-    return cells
-
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     grid = GridWidget()
 
-    # Вариант 1: задать реку списком клеток — как захотите, так и изогнётся
+    # Задать реку списком клеток — как захотите, так и изогнётся
     # локация "междуречье"
     # grid.set_river([(4, 0), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5), (4, 6), (9, 0), (9, 1), (9, 2), (9, 3), (9, 4), (9, 5), (9, 6)])
     # локация "развилка"
@@ -97,9 +114,6 @@ if __name__ == "__main__":
     # grid.set_river([(0, 5), (0, 6), (1, 4), (1, 5), (1, 6), (2, 4), (2, 5), (3, 3), (3, 4), (3, 5), (4, 3), 
     #                (4, 4), (5, 2), (5, 3), (5, 4), (6, 2), (6, 3), (7, 1), (7, 2), (7, 3), (8, 1), (8, 2), 
     #                (9, 0), (9, 1), (9, 2), (10, 0), (10, 1), (11, 0), (11, 1), (12, 0), (13, 0)])
-
-    # Вариант 2: прямая линия через помощник
-    # grid.set_river(make_river_line((3, 0), (3, 5)))
 
     grid.show()
     sys.exit(app.exec_())
