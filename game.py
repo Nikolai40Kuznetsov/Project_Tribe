@@ -60,7 +60,7 @@ RIVER_LAYOUTS = {
 
 
 class TechTreeWidget(QWidget):
-    # ... (код без изменений, он большой, я его сохранил)
+    # ... (код без изменений)
     NODE_W, NODE_H = 306, 85
     LEVEL_GAP_X = 140
     NODE_GAP_Y = 25
@@ -361,7 +361,9 @@ class GridWidget(QWidget):
         self.humans_target = None
         self.bushes = set()
         self.trees = set()
+        self.burning_trees = [] # {"pos": (c, r), "life": 10}
         self.stones = set()
+        self.campfires = [] # {"pos": (c, r), "life": 3}
         self.pending_harvest = None
         self.resources = {"berries": 0, "wood": 0, "stone": 0, "chopper": 0}
         self.moving_mode = False
@@ -379,8 +381,16 @@ class GridWidget(QWidget):
         self.tree_pixmap = QPixmap("tree.png")
         self.has_tree_img = not self.tree_pixmap.isNull()
 
+        self.tree_burning_pixmap = QPixmap("tree_burning.png")
+        self.has_tree_burning_img = not self.tree_burning_pixmap.isNull()
+
         self.stone_pixmap = QPixmap("stone.png")
         self.has_stone_img = not self.stone_pixmap.isNull()
+        
+        self.campfire_pixmap = QPixmap("campfire.png")
+        self.has_campfire_img = not self.campfire_pixmap.isNull()
+
+        self.is_winter = False
 
     def set_river(self, cells):
         for r in range(ROWS):
@@ -391,7 +401,9 @@ class GridWidget(QWidget):
         self.groups = []
         self.bushes.clear()
         self.trees.clear()
+        self.burning_trees.clear()
         self.stones.clear()
+        self.campfires.clear()
         self.resources = {"berries": 0, "wood": 0, "stone": 0, "chopper": 0}
         self.spawn_entities()
         self.update()
@@ -400,21 +412,18 @@ class GridWidget(QWidget):
         land_tiles = [(c, r) for r in range(ROWS) for c in range(COLS) if not self.tiles[r][c]["is_river"]]
         if land_tiles:
             c, r = random.choice(land_tiles)
-            self.groups = [{"pos": (c, r), "count": random.randint(10, 15)}]
+            self.groups = [{"pos": (c, r), "count": random.randint(20, 30)}]
             
         occupied = [g["pos"] for g in self.groups]
         
-        # Кусты (10)
         empty_land = [t for t in land_tiles if t not in occupied]
         num_bushes = min(10, len(empty_land))
         self.bushes = set(random.sample(empty_land, num_bushes))
         
-        # Деревья (5)
         empty_land_after_bushes = [t for t in empty_land if t not in self.bushes]
         num_trees = min(5, len(empty_land_after_bushes))
         self.trees = set(random.sample(empty_land_after_bushes, num_trees))
 
-        # Камни (5)
         empty_land_after_trees = [t for t in empty_land_after_bushes if t not in self.trees]
         num_stones = min(5, len(empty_land_after_trees))
         self.stones = set(random.sample(empty_land_after_trees, num_stones))
@@ -435,7 +444,21 @@ class GridWidget(QWidget):
         hc, hr = group_pos
         return abs(hc - c) <= 1 and abs(hr - r) <= 1
 
+    def is_near_fire(self, c, r):
+        # Проверка на костры
+        for cf in self.campfires:
+            cc, cr = cf["pos"]
+            if abs(cc - c) <= 1 and abs(cr - r) <= 1:
+                return True
+        # Проверка на горящие деревья
+        for bt in self.burning_trees:
+            bc, br = bt["pos"]
+            if abs(bc - c) <= 1 and abs(br - r) <= 1:
+                return True
+        return False
+
     def next_turn(self):
+        # 1. Перемещение групп
         for g in self.groups:
             if "target" in g and g["target"]:
                 hc, hr = g["pos"]
@@ -444,19 +467,22 @@ class GridWidget(QWidget):
                     dx = 0 if tc == hc else (1 if tc > hc else -1)
                     dy = 0 if tr == hr else (1 if tr > hr else -1)
                     nc, nr = hc + dx, hr + dy
-                    if not self.tiles[nr][nc]["is_river"] and self.get_group_at(nc, nr) is None:
+                    can_walk = not self.tiles[nr][nc]["is_river"] or self.is_winter
+                    if can_walk and self.get_group_at(nc, nr) is None:
                         g["pos"] = (nc, nr)
                     else:
                         g["target"] = None
                 if g["pos"] == g["target"]:
                     g["target"] = None
                     
+        # 2. Сбор
         if self.pending_harvest:
             if self.pending_harvest in self.bushes:
                 self.bushes.remove(self.pending_harvest)
                 self.resources["berries"] += 10
             self.pending_harvest = None
             
+        # 3. Потребление и голод
         total_people = sum(g["count"] for g in self.groups)
         if total_people > 0:
             if self.resources["berries"] > 0:
@@ -467,6 +493,34 @@ class GridWidget(QWidget):
                     largest["count"] -= 1
                     if largest["count"] <= 0:
                         self.groups.remove(largest)
+
+        # 4. Зима: убыль от холода
+        if self.is_winter:
+            for g in self.groups:
+                if not self.is_near_fire(*g["pos"]):
+                    g["count"] -= 1
+                    if g["count"] <= 0:
+                        self.groups.remove(g)
+                        break
+
+        # 5. Обновление костров и горящих деревьев
+        for cf in list(self.campfires):
+            cf["life"] -= 1
+            if cf["life"] <= 0:
+                self.campfires.remove(cf)
+                
+        for bt in list(self.burning_trees):
+            bt["life"] -= 1
+            if bt["life"] <= 0:
+                self.burning_trees.remove(bt)
+
+        # 6. Молния (5% шанс)
+        if random.random() < 0.05 and self.trees:
+            # Выбираем случайное дерево
+            tree_pos = random.choice(list(self.trees))
+            # Оно сгорает и появляется горящее дерево
+            self.trees.remove(tree_pos)
+            self.burning_trees.append({"pos": tree_pos, "life": 10})
                         
         if self.on_tick:
             self.on_tick()
@@ -566,6 +620,57 @@ class GridWidget(QWidget):
                     menu.addAction("Нужно рубило").setEnabled(False)
                     menu.exec_(event.globalPos())
 
+            elif cell in self.stones:
+                adjacent = any(self.is_adjacent_to_group(c, r, g["pos"]) for g in self.groups)
+                if adjacent:
+                    menu = QMenu(self)
+                    collect_action = QAction("Собрать камень", self)
+                    collect_action.triggered.connect(lambda: self.queue_collect_stone(c, r))
+                    menu.addAction(collect_action)
+                    menu.exec_(event.globalPos())
+                else:
+                    menu = QMenu(self)
+                    menu.addAction("Слишком далеко").setEnabled(False)
+                    menu.exec_(event.globalPos())
+
+            # Проверка на костёр или горящее дерево для поддержания огня
+            cf_at = None
+            for cf in self.campfires:
+                if cf["pos"] == cell:
+                    cf_at = cf
+                    break
+                    
+            bt_at = None
+            for bt in self.burning_trees:
+                if bt["pos"] == cell:
+                    bt_at = bt
+                    break
+
+            if cf_at or bt_at:
+                # Проверяем технологию "Поддержание огня"
+                can_maintain = False
+                if self.tech_tree:
+                    tech = self.tech_tree.tech_by_name("Поддержание огня")
+                    if tech and tech["researched"]:
+                        can_maintain = True
+                
+                if can_maintain and self.resources["wood"] >= 1:
+                    menu = QMenu(self)
+                    maintain_action = QAction("Поддержать огонь (1 дерево)", self)
+                    if cf_at:
+                        maintain_action.triggered.connect(lambda: self.maintain_fire(cf_at))
+                    else:
+                        maintain_action.triggered.connect(lambda: self.maintain_fire(bt_at))
+                    menu.addAction(maintain_action)
+                    menu.exec_(event.globalPos())
+
+    def maintain_fire(self, fire_obj):
+        if self.resources["wood"] >= 1:
+            self.resources["wood"] -= 1
+            fire_obj["life"] += 3
+            if self.on_update_ui: self.on_update_ui()
+            self.update()
+
     def start_move_mode_for(self, group_idx):
         self.moving_group_idx = group_idx
         self.moving_mode = True
@@ -606,18 +711,57 @@ class GridWidget(QWidget):
             if self.on_update_ui: self.on_update_ui()
             self.update()
 
+    def queue_collect_stone(self, c, r):
+        if (c, r) in self.stones:
+            self.stones.remove((c, r))
+            self.resources["stone"] += 1
+            if self.on_update_ui: self.on_update_ui()
+            self.update()
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         for r in range(ROWS):
             for c in range(COLS):
                 rect = QRect(c * CELL_SIZE, r * CELL_SIZE, CELL_SIZE, CELL_SIZE)
-                painter.setBrush(QColor(43, 171, 197) if self.tiles[r][c]["is_river"] else QColor(23, 124, 19))
+                if self.tiles[r][c]["is_river"]:
+                    color = QColor(150, 200, 255) if self.is_winter else QColor(43, 171, 197)
+                else:
+                    color = QColor(255, 255, 255) if self.is_winter else QColor(23, 124, 19)
+                painter.setBrush(color)
                 painter.setPen(Qt.NoPen); painter.drawRect(rect)
 
         pen = QPen(Qt.black); pen.setWidth(1); painter.setPen(pen)
         for x in range(0, self.width() + 1, CELL_SIZE): painter.drawLine(x, 0, x, self.height())
         for y in range(0, self.height() + 1, CELL_SIZE): painter.drawLine(0, y, self.width(), y)
+
+        # Горящие деревья
+        for bt in self.burning_trees:
+            bc, br = bt["pos"]
+            cell_rect = QRect(bc * CELL_SIZE, br * CELL_SIZE, CELL_SIZE, CELL_SIZE)
+            img_size = int(CELL_SIZE * 0.9)
+            img_x = cell_rect.left() + (CELL_SIZE - img_size) // 2
+            img_y = cell_rect.top() + (CELL_SIZE - img_size) // 2
+            img_rect = QRect(img_x, img_y, img_size, img_size)
+            if self.has_tree_burning_img: painter.drawPixmap(img_rect, self.tree_burning_pixmap.scaled(img_size, img_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            else:
+                painter.setPen(Qt.NoPen); painter.setBrush(QColor(255, 100, 0)); painter.drawEllipse(img_rect)
+            painter.setPen(Qt.white); painter.setFont(QFont("Arial", 10, QFont.Bold))
+            painter.drawText(cell_rect, Qt.AlignTop | Qt.AlignRight, str(bt["life"]))
+
+        # Костры
+        for cf in self.campfires:
+            bc, br = cf["pos"]
+            cell_rect = QRect(bc * CELL_SIZE, br * CELL_SIZE, CELL_SIZE, CELL_SIZE)
+            img_size = int(CELL_SIZE * 0.75)
+            img_x = cell_rect.left() + (CELL_SIZE - img_size) // 2
+            img_y = cell_rect.top() + (CELL_SIZE - img_size) // 2
+            img_rect = QRect(img_x, img_y, img_size, img_size)
+            if self.has_campfire_img: painter.drawPixmap(img_rect, self.campfire_pixmap.scaled(img_size, img_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            else:
+                painter.setPen(Qt.NoPen); painter.setBrush(QColor(255, 140, 0)); painter.drawEllipse(img_rect)
+            painter.setPen(Qt.white); painter.setFont(QFont("Arial", 10, QFont.Bold))
+            painter.drawText(cell_rect, Qt.AlignTop | Qt.AlignRight, str(cf["life"]))
 
         # Камни
         for (bc, br) in self.stones:
@@ -713,6 +857,9 @@ class ResourcesWidget(QWidget):
         
         self.people_label = QLabel(); self.people_label.setFont(QFont("Arial", 14)); self.people_label.setStyleSheet("padding: 10px; font-size: 16px;")
         self.layout.addWidget(self.people_label)
+
+        self.season_label = QLabel(); self.season_label.setFont(QFont("Arial", 14)); self.season_label.setStyleSheet("padding: 10px; font-size: 16px; color: #00E5FF;")
+        self.layout.addWidget(self.season_label)
         
         self.update_ui()
         
@@ -723,6 +870,9 @@ class ResourcesWidget(QWidget):
         self.chopper_label.setText(f"🪓 Рубила: {self.grid.resources['chopper']}")
         total = sum(g["count"] for g in self.grid.groups)
         self.people_label.setText(f"👥 Люди: {total}")
+        
+        season_text = "❄️ Зима" if self.grid.is_winter else "☀️ Тепло"
+        self.season_label.setText(f"Сезон: {season_text}")
 
 
 class CraftingWidget(QWidget):
@@ -752,6 +902,20 @@ class CraftingWidget(QWidget):
         self.btn_chop.clicked.connect(self.craft_chopper)
         self.layout.addWidget(self.btn_chop)
 
+        self.btn_campfire = QPushButton("Создать костёр (2 дерева)")
+        self.btn_campfire.setStyleSheet("""
+            QPushButton {
+                background-color: #d35400; color: white; 
+                font-size: 16px; padding: 10px; border-radius: 5px;
+                margin: 10px;
+            }
+            QPushButton:hover { background-color: #e67e22; }
+            QPushButton:pressed { background-color: #a04000; }
+            QPushButton:disabled { background-color: #7F8C8D; color: #BDC3C7; }
+        """)
+        self.btn_campfire.clicked.connect(self.craft_campfire)
+        self.layout.addWidget(self.btn_campfire)
+
         self.info_label = QLabel()
         self.info_label.setStyleSheet("padding: 10px; color: #bbb;")
         self.layout.addWidget(self.info_label)
@@ -759,7 +923,6 @@ class CraftingWidget(QWidget):
         self.update_ui()
 
     def craft_chopper(self):
-        # Проверка технологии
         has_tools = False
         if self.grid.tech_tree:
             tools_tech = self.grid.tech_tree.tech_by_name("Грубые каменные инструменты")
@@ -775,11 +938,35 @@ class CraftingWidget(QWidget):
             self.grid.resources["chopper"] += 1
             self.info_label.setText("Создано 1 рубило!")
             self.grid.on_update_ui()
+            # Принудительно тратим ход
+            self.grid.next_turn()
         else:
             self.info_label.setText("Не хватает камней!")
 
+    def craft_campfire(self):
+        has_fire = False
+        if self.grid.tech_tree:
+            fire_tech = self.grid.tech_tree.tech_by_name("Добыча огня")
+            if fire_tech and fire_tech["researched"]:
+                has_fire = True
+                
+        if not has_fire:
+            self.info_label.setText("Нужна технология 'Добыча огня'")
+            return
+            
+        if self.grid.resources["wood"] >= 2:
+            if self.grid.groups:
+                g = self.grid.groups[0]
+                self.grid.campfires.append({"pos": g["pos"], "life": 3})
+                self.grid.resources["wood"] -= 2
+                self.info_label.setText("Создан костёр на 3 хода!")
+                self.grid.on_update_ui()
+            else:
+                self.info_label.setText("Некуда ставить костёр (нет племени)!")
+        else:
+            self.info_label.setText("Не хватает древесины (нужно 2)!")
+
     def update_ui(self):
-        # Активность кнопки
         has_tools = False
         if self.grid.tech_tree:
             tools_tech = self.grid.tech_tree.tech_by_name("Грубые каменные инструменты")
@@ -795,6 +982,22 @@ class CraftingWidget(QWidget):
             self.btn_chop.setText("Создать рубило (нет камней)")
         else:
             self.btn_chop.setText("Создать рубило (1 камень)")
+
+        has_fire = False
+        if self.grid.tech_tree:
+            fire_tech = self.grid.tech_tree.tech_by_name("Добыча огня")
+            if fire_tech and fire_tech["researched"]:
+                has_fire = True
+
+        can_campfire = has_fire and self.grid.resources["wood"] >= 2
+        self.btn_campfire.setEnabled(can_campfire)
+        
+        if not has_fire:
+            self.btn_campfire.setText("Создать костёр (нужна технология)")
+        elif self.grid.resources["wood"] < 2:
+            self.btn_campfire.setText("Создать костёр (нужно 2 дерева)")
+        else:
+            self.btn_campfire.setText("Создать костёр (2 дерева)")
 
 
 class MainWindow(QWidget):
@@ -855,11 +1058,9 @@ class MainWindow(QWidget):
         tech_layout.addWidget(scroll)
         self.tabs.addTab(tech_page, "Технологии")
         
-        # -- Вкладка Создание --
         self.crafting_tab = CraftingWidget(self.world_tab)
         self.tabs.addTab(self.crafting_tab, "Создание")
 
-        # -- Вкладка Ресурсы --
         self.resources_tab = ResourcesWidget(self.world_tab)
         self.tabs.addTab(self.resources_tab, "Ресурсы")
 
@@ -879,6 +1080,10 @@ class MainWindow(QWidget):
         self.turn_label.setText(f"Ход: {self.turn_count}")
         self.tech_tree.tick()
         self.crafting_tab.update_ui()
+        
+        # Сезоны: 12 ходов в году, 9 тепло, 3 холодно
+        cycle = (self.turn_count - 1) % 12
+        self.world_tab.is_winter = cycle >= 9
         
         # Рост кустов каждые 5 ходов
         if self.turn_count % 5 == 0 and len(self.world_tab.bushes) < 15:
